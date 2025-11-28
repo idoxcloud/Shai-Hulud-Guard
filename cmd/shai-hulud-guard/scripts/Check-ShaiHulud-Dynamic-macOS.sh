@@ -539,11 +539,20 @@ scan_node_modules() {
   local nm_dirs=("$@")
   local total=${#nm_dirs[@]}
   local current=0
+  local batch_size=100  # Process in batches to avoid memory issues
+  local progress_update=50  # Update progress every N directories
+  
+  echo "[*] Scanning $total node_modules directories..."
   
   for nm in "${nm_dirs[@]}"; do
     ((current++))
+    
+    # Update progress less frequently to reduce string operations and memory pressure
+    if (( current % progress_update == 0 )) || (( current == total )); then
+      printf "[*] Progress: %d/%d directories scanned...\n" "$current" "$total" >&2
+    fi
+    
     [[ -d "$nm" ]] || continue
-    echo -ne "\r[*] Scanning node_modules: $current/$total..." >&2
     
     while IFS= read -r -d '' child; do
       local name
@@ -554,22 +563,25 @@ scan_node_modules() {
           local pkgname
           pkgname="$(basename "$pkgdir")"
           if is_compromised_scoped "$name" "$pkgname"; then
-            echo -ne "\r" >&2
             add_finding "node_modules" "$name/$pkgname" "$pkgdir"
             echo "    [!] FOUND: $name/$pkgname at $nm"
           fi
         done < <(find "$child" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
       else
         if is_compromised_unscoped "$name"; then
-          echo -ne "\r" >&2
           add_finding "node_modules" "$name" "$child"
           echo "    [!] FOUND: $name at $nm"
         fi
       fi
     done < <(find "$nm" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+    
+    # Periodically force garbage collection opportunity in bash
+    if (( current % batch_size == 0 )); then
+      sleep 0.01  # Brief pause to allow shell to clean up
+    fi
   done
-  echo -ne "\r" >&2
-  echo "[*] Scanned $total node_modules directories"
+  
+  echo "[*] Completed scanning $total node_modules directories"
 }
 
 scan_npm_cache() {

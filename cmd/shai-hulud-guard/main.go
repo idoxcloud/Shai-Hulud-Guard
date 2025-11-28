@@ -101,9 +101,9 @@ func main() {
 		scanForce     = flag.Bool("force-scan", false, "Force scanning even if no node_modules found (use with -scan)")
 		
 		// S3 scan-specific flags
-		s3AccessKey = flag.String("access-key", "", "S3 access key (use with -scan-s3)")
-		s3SecretKey = flag.String("secret-key", "", "S3 secret key (use with -scan-s3)")
-		s3Host      = flag.String("host", "", "S3 host (use with -scan-s3)")
+		s3AccessKey = flag.String("access-key", os.Getenv("S3_ACCESS_KEY"), "S3 access key (use with -scan-s3, or set S3_ACCESS_KEY env var)")
+		s3SecretKey = flag.String("secret-key", os.Getenv("S3_SECRET_KEY"), "S3 secret key (use with -scan-s3, or set S3_SECRET_KEY env var)")
+		s3Host      = flag.String("host", os.Getenv("S3_HOST"), "S3 host (use with -scan-s3, or set S3_HOST env var)")
 		s3Port      = flag.String("port", "9000", "S3 port (use with -scan-s3)")
 		s3Protocol  = flag.String("protocol", "https", "S3 protocol: http or https (use with -scan-s3)")
 		s3Bucket    = flag.String("bucket", "", "S3 bucket name (use with -scan-s3)")
@@ -155,6 +155,12 @@ func main() {
 
 	// Handle scan command - doesn't require admin privileges
 	if *scan {
+		// Validate scan mode to prevent path traversal
+		if *scanMode != "quick" && *scanMode != "full" {
+			fmt.Fprintf(os.Stderr, "ERROR: Invalid scan mode '%s'. Must be 'quick' or 'full'\n", *scanMode)
+			os.Exit(1)
+		}
+		
 		// Build arguments from flags
 		var scanArgs []string
 		
@@ -200,12 +206,33 @@ func main() {
 		// Build arguments from flags
 		var scanArgs []string
 		
-		// Required flags
-		if *s3AccessKey != "" {
-			scanArgs = append(scanArgs, "-a", *s3AccessKey)
+		// Get credentials from flags or environment variables
+		accessKey := *s3AccessKey
+		if accessKey == "" {
+			accessKey = os.Getenv("AWS_ACCESS_KEY_ID")
 		}
-		if *s3SecretKey != "" {
-			scanArgs = append(scanArgs, "-s", *s3SecretKey)
+		
+		secretKey := *s3SecretKey
+		if secretKey == "" {
+			secretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+		}
+		
+		// Warn if credentials are passed via command-line
+		if *s3AccessKey != "" || *s3SecretKey != "" {
+			fmt.Fprintln(os.Stderr, "⚠️  WARNING: Passing credentials via command-line flags is insecure!")
+			fmt.Fprintln(os.Stderr, "   Credentials are visible in process list and shell history.")
+			fmt.Fprintln(os.Stderr, "   Recommended: Use environment variables instead:")
+			fmt.Fprintln(os.Stderr, "     export AWS_ACCESS_KEY_ID=your-key")
+			fmt.Fprintln(os.Stderr, "     export AWS_SECRET_ACCESS_KEY=your-secret")
+			fmt.Fprintln(os.Stderr, "")
+		}
+		
+		// Required flags
+		if accessKey != "" {
+			scanArgs = append(scanArgs, "-a", accessKey)
+		}
+		if secretKey != "" {
+			scanArgs = append(scanArgs, "-s", secretKey)
 		}
 		if *s3Host != "" {
 			scanArgs = append(scanArgs, "-h", *s3Host)
@@ -240,8 +267,14 @@ func main() {
 
 	// Handle report command - generates comprehensive report
 	if *report {
-		// Use full scan mode for reports unless explicitly specified
+		// Validate and sanitize scan mode to prevent path traversal
 		reportMode := *scanMode
+		if reportMode != "quick" && reportMode != "full" {
+			fmt.Fprintf(os.Stderr, "ERROR: Invalid scan mode '%s'. Must be 'quick' or 'full'\n", reportMode)
+			os.Exit(1)
+		}
+		
+		// Use full scan mode for reports unless explicitly specified
 		if reportMode == "quick" && !isFlagSet("mode") {
 			reportMode = "full"
 		}

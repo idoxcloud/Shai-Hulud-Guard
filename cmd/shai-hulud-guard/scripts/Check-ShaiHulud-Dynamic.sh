@@ -331,7 +331,20 @@ find_node_modules() {
 
 scan_node_modules() {
   local nm_dirs=("$@")
+  local total=${#nm_dirs[@]}
+  local current=0
+  local progress_update=50
+  
+  echo "[*] Scanning $total node_modules directories..."
+  
   for nm in "${nm_dirs[@]}"; do
+    ((current++))
+    
+    # Update progress less frequently
+    if (( current % progress_update == 0 )) || (( current == total )); then
+      printf "[*] Progress: %d/%d directories scanned...\n" "$current" "$total" >&2
+    fi
+    
     [[ -d "$nm" ]] || continue
     while IFS= read -r -d '' child; do
       local name

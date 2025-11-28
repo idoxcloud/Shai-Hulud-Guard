@@ -57,7 +57,7 @@ func (m *SystemCertificateManager) getMacOSCerts() (string, error) {
 		return "", fmt.Errorf("failed to extract system certificates: %w", err)
 	}
 
-	if err := os.WriteFile(certPath, output, 0644); err != nil {
+	if err := os.WriteFile(certPath, output, 0600); err != nil {
 		return "", fmt.Errorf("failed to write certificate bundle: %w", err)
 	}
 

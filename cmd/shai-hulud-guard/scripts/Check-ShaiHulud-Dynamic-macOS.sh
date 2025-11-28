@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# SHAI_HULUD_SCANNER_SAFE - This file is part of the Shai-Hulud scanner itself
+# Files containing this marker will be excluded from malware detection scans
+
 # Track if we've encountered an error - stop checkpointing after first error
 SCAN_ERROR=0
 
@@ -870,6 +873,10 @@ scan_hashes() {
     [[ -d "$root" ]] || continue
     if [[ "$mode" == "quick" ]]; then
       while IFS= read -r -d '' file; do
+        # Skip files that are part of the scanner itself
+        if head -n 10 "$file" 2>/dev/null | grep -q "SHAI_HULUD_SCANNER_SAFE"; then
+          continue
+        fi
         ((scanned++))
         if (( scanned % 50 == 0 )); then
           echo -ne "\r[*] Hashed $scanned files..." >&2
@@ -893,6 +900,10 @@ scan_hashes() {
       done < <(find "$root" \( -path "*/node_modules/*/node_modules/*" -prune \) -o -type f \( $(printf -- '-name %q -o ' "${SUSPICIOUS_NAMES[@]}") -false \) -print0 2>/dev/null)
     else
       while IFS= read -r -d '' file; do
+        # Skip files that are part of the scanner itself
+        if head -n 10 "$file" 2>/dev/null | grep -q "SHAI_HULUD_SCANNER_SAFE"; then
+          continue
+        fi
         ((scanned++))
         if (( scanned % 50 == 0 )); then
           echo -ne "\r[*] Hashed $scanned files..." >&2

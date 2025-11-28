@@ -48,7 +48,7 @@ func (m *SystemNPMManager) Restore() error {
 	if m.DryRun {
 		fmt.Println("  [DRY RUN] Would restore npm configuration")
 		fmt.Println("    • Would remove npm certificate configuration")
-		fmt.Println("    • Would delete global registry setting")
+		fmt.Println("    • Would restore registry to public npm registry (https://registry.npmjs.org/)")
 		
 		var npmrcPath string
 		if runtime.GOOS == "windows" {
@@ -133,10 +133,26 @@ func restoreNPMConfig() error {
 	// Remove certificate configuration
 	if err := RemoveNPMCerts(false); err != nil {
 		fmt.Printf("  ⚠ Warning: Could not remove npm cafile: %v\\n", err)
+	} else {
+		fmt.Println("  ✓ npm certificate configuration removed")
 	}
 
-	cmd := exec.Command("npm", "config", "delete", "registry", "--location=global")
-	_ = cmd.Run()
+	// Set registry back to public npm registry at global level
+	cmdGlobal := exec.Command("npm", "config", "set", "registry", "https://registry.npmjs.org/", "--location=global")
+	if err := cmdGlobal.Run(); err != nil {
+		fmt.Printf("  ⚠ Warning: Could not reset global registry to public: %v\\n", err)
+	} else {
+		fmt.Println("  ✓ npm global registry restored to public registry")
+	}
+
+	// Delete user-level registry config (to use global default)
+	cmdUser := exec.Command("npm", "config", "delete", "registry", "--location=user")
+	if err := cmdUser.Run(); err != nil {
+		// This might fail if it doesn't exist, which is fine
+		fmt.Println("  ℹ No user-level registry config to remove")
+	} else {
+		fmt.Println("  ✓ npm user-level registry config removed")
+	}
 
 	var npmrcPath string
 	if runtime.GOOS == "windows" {
@@ -148,9 +164,9 @@ func restoreNPMConfig() error {
 	content, err := os.ReadFile(npmrcPath)
 	if err == nil && strings.Contains(string(content), "Shai-Hulud Guard") {
 		os.Remove(npmrcPath)
+		fmt.Printf("  ✓ Removed system npmrc: %s\\n", npmrcPath)
 	}
 
-	fmt.Println("  ✓ npm configuration restored")
 	return nil
 }
 

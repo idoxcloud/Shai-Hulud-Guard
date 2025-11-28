@@ -616,53 +616,71 @@ PY
   done
 }
 
+# Worker function for parallel hash checking
+check_file_hash() {
+  local file="$1"
+  
+  # Skip files that are part of the scanner itself
+  if head -n 10 "$file" 2>/dev/null | grep -q "SHAI_HULUD_SCANNER_SAFE"; then
+    return 0
+  fi
+  
+  local sha256
+  sha256=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+  if [[ -n "${MAL_SHA256[$sha256]:-}" ]]; then
+    echo "malware-hash|SHA256 match: ${MAL_SHA256[$sha256]}|$file"
+    return 0
+  fi
+  
+  local sha1
+  sha1=$(sha1sum "$file" 2>/dev/null | awk '{print $1}')
+  if [[ -n "${MAL_SHA1[$sha1]:-}" ]]; then
+    echo "malware-hash|SHA1 match: ${MAL_SHA1[$sha1]}|$file"
+  fi
+}
+
+export -f check_file_hash
+export MAL_SHA256
+export MAL_SHA1
+
 scan_hashes() {
   local mode="$1"; shift
   local roots=("$@")
+  local num_cores
+  num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
+  local parallel_jobs=$((num_cores * 2))
+  
+  echo "[*] Using $parallel_jobs parallel workers for hash scanning"
+  
+  local tmpfile
+  tmpfile=$(mktemp)
+  
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == "quick" ]]; then
-      while IFS= read -r -d '' file; do
-        # Skip files that are part of the scanner itself
-        if head -n 10 "$file" 2>/dev/null | grep -q "SHAI_HULUD_SCANNER_SAFE"; then
-          continue
-        fi
-        local sha256
-        sha256=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
-        if [[ -n "${MAL_SHA256[$sha256]:-}" ]]; then
-          add_finding "malware-hash" "SHA256 match: ${MAL_SHA256[$sha256]}" "$file"
-          echo "    [!!!] MALWARE DETECTED: $file"
-          continue
-        fi
-        local sha1
-        sha1=$(sha1sum "$file" 2>/dev/null | awk '{print $1}')
-        if [[ -n "${MAL_SHA1[$sha1]:-}" ]]; then
-          add_finding "malware-hash" "SHA1 match: ${MAL_SHA1[$sha1]}" "$file"
-          echo "    [!!!] MALWARE DETECTED: $file"
-        fi
-      done < <(find "$root" \( -path "*/node_modules/*/node_modules/*" -prune \) -o -type f \( $(printf -- '-name %q -o ' "${SUSPICIOUS_NAMES[@]}") -false \) -print0 2>/dev/null)
+      find "$root" \( -path "*/node_modules/*/node_modules/*" -prune \) -o -type f \( $(printf -- '-name %q -o ' "${SUSPICIOUS_NAMES[@]}") -false \) -print0 2>/dev/null | \
+        xargs -0 -P "$parallel_jobs" -I {} bash -c 'check_file_hash "$@"' _ {} >> "$tmpfile"
     else
-      while IFS= read -r -d '' file; do
-        # Skip files that are part of the scanner itself
-        if head -n 10 "$file" 2>/dev/null | grep -q "SHAI_HULUD_SCANNER_SAFE"; then
-          continue
-        fi
-        local sha256
-        sha256=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
-        if [[ -n "${MAL_SHA256[$sha256]:-}" ]]; then
-          add_finding "malware-hash" "SHA256 match: ${MAL_SHA256[$sha256]}" "$file"
-          echo "    [!!!] MALWARE DETECTED: $file"
-          continue
-        fi
-        local sha1
-        sha1=$(sha1sum "$file" 2>/dev/null | awk '{print $1}')
-        if [[ -n "${MAL_SHA1[$sha1]:-}" ]]; then
-          add_finding "malware-hash" "SHA1 match: ${MAL_SHA1[$sha1]}" "$file"
-          echo "    [!!!] MALWARE DETECTED: $file"
-        fi
-      done < <(find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" \) -print0 2>/dev/null)
+      find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" \) -print0 2>/dev/null | \
+        xargs -0 -P "$parallel_jobs" -I {} bash -c 'check_file_hash "$@"' _ {} >> "$tmpfile"
     fi
   done
+  
+  # Process results
+  local scanned=0
+  while IFS='|' read -r type desc location; do
+    if [[ -n "$type" ]]; then
+      add_finding "$type" "$desc" "$location"
+      echo "    [!!!] MALWARE DETECTED: $location"
+      ((scanned++))
+    fi
+  done < "$tmpfile"
+  
+  local total_files
+  total_files=$(find "${roots[@]}" -type f \( -name "*.js" -o -name "*.ts" \) 2>/dev/null | wc -l | tr -d ' ')
+  echo "[*] Hashed $total_files files for malware detection (found $scanned malicious files)"
+  
+  rm -f "$tmpfile"
 }
 
 scan_migration_suffix() {

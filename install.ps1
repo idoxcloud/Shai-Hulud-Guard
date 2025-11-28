@@ -155,7 +155,7 @@ function Main {
                     exit 1
                 }
                 Write-Host ""
-                & $tmpBinary -install
+                & $tmpBinary -install -yes
             }
             
             "guard-uninstall" {
@@ -168,7 +168,7 @@ function Main {
                     exit 1
                 }
                 Write-Host ""
-                & $tmpBinary -uninstall
+                & $tmpBinary -uninstall -yes
             }
             
             "status" {

@@ -184,7 +184,7 @@ main() {
                 exit 1
             fi
             echo ""
-            "$tmp_binary" -install
+            "$tmp_binary" -install -yes
             ;;
             
         guard-uninstall)
@@ -197,7 +197,7 @@ main() {
                 exit 1
             fi
             echo ""
-            "$tmp_binary" -uninstall
+            "$tmp_binary" -uninstall -yes
             ;;
             
         status)

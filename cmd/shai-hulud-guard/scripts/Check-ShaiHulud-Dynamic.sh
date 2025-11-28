@@ -7,8 +7,50 @@ set -euo pipefail
 # Track if we've encountered an error - stop checkpointing after first error
 SCAN_ERROR=0
 
+# Track all background process groups for cleanup
+BG_PIDS=()
+
+# Flag to prevent double cleanup
+CLEANUP_DONE=0
+
+# Cleanup function to kill all background processes
+cleanup() {
+  # Prevent double cleanup
+  [[ $CLEANUP_DONE -eq 1 ]] && return
+  CLEANUP_DONE=1
+  
+  local exit_code=$?
+  echo "" >&2
+  echo "[*] Cleaning up background processes..." >&2
+  
+  # Kill all tracked background processes and their children
+  if [[ ${#BG_PIDS[@]} -gt 0 ]]; then
+    for pid in "${BG_PIDS[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        # Kill the process group (negative PID kills the group)
+        kill -TERM "-$pid" 2>/dev/null || true
+        # Give it a moment to terminate gracefully
+        sleep 0.1
+        # Force kill if still running
+        kill -KILL "-$pid" 2>/dev/null || true
+      fi
+    done
+  fi
+  
+  # Also find and kill any orphaned xargs processes from this script
+  pkill -P $$ 2>/dev/null || true
+  
+  # Clean up any temp files
+  rm -f /tmp/tmp.* 2>/dev/null || true
+  
+  exit "$exit_code"
+}
+
 # Trap errors and set error flag
 trap 'SCAN_ERROR=1' ERR
+
+# Trap exit and signals to ensure cleanup
+trap cleanup EXIT INT TERM QUIT HUP
 
 ROOTS=("$HOME")
 SCAN_MODE="full"
@@ -163,13 +205,13 @@ if [[ "$SCAN_MODE" != "quick" && "$SCAN_MODE" != "full" ]]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd -- \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"
-CACHE_DIR=\"${TMPDIR:-/tmp}/shai-hulud-scanner-cache\"
-CACHE_FILE=\"$CACHE_DIR/compromised-packages-cache.txt\"
+SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CACHE_DIR="${TMPDIR:-/tmp}/shai-hulud-scanner-cache"
+CACHE_FILE="$CACHE_DIR/compromised-packages-cache.txt"
 CACHE_TTL=86400  # 24 hours in seconds
 
 # Create cache directory
-mkdir -p \"$CACHE_DIR\"
+mkdir -p "$CACHE_DIR"
 
 PACKAGE_FEED_URLS=(
   "https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/refs/heads/main/compromised-packages.txt"
@@ -189,20 +231,53 @@ CLOUD_CREDENTIAL_PATHS=(".aws/credentials" ".aws/config" ".azure/" ".npmrc" ".en
 SUSPICIOUS_HOOK_PATTERNS=("curl " "wget " "node -e" "eval(" "base64" "webhook" "exfil" "/tmp/" "\\temp\\" "powershell" "cmd /c")
 SUSPICIOUS_NAMES=("bundle.js" "setup_bun.js" "bun_environment.js" "shai-hulud.js" "shai_hulud.js")
 
-declare -A MAL_SHA256=(
-  ["46faab8ab153fae6e80e7cca38eab363075bb524edd79e42269217a083628f09"]="Shai-Hulud bundle.js payload"
-  ["b74caeaa75e077c99f7d44f46daaf9796a3be43ecf24f2a1fd381844669da777"]="Shai-Hulud malicious file"
-  ["dc67467a39b70d1cd4c1f7f7a459b35058163592f4a9e8fb4dffcbba98ef210c"]="Shai-Hulud malicious file"
-  ["4b2399646573bb737c4969563303d8ee2e9ddbd1b271f1ca9e35ea78062538db"]="Shai-Hulud malicious file"
-)
+# Hash checking functions (compatible with bash 3.2)
+check_mal_sha256() {
+  local hash="$1"
+  case "$hash" in
+    "46faab8ab153fae6e80e7cca38eab363075bb524edd79e42269217a083628f09")
+      echo "Shai-Hulud bundle.js payload"
+      return 0
+      ;;
+    "b74caeaa75e077c99f7d44f46daaf9796a3be43ecf24f2a1fd381844669da777")
+      echo "Shai-Hulud malicious file"
+      return 0
+      ;;
+    "dc67467a39b70d1cd4c1f7f7a459b35058163592f4a9e8fb4dffcbba98ef210c")
+      echo "Shai-Hulud malicious file"
+      return 0
+      ;;
+    "4b2399646573bb737c4969563303d8ee2e9ddbd1b271f1ca9e35ea78062538db")
+      echo "Shai-Hulud malicious file"
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
-declare -A MAL_SHA1=(
-  ["d1829b4708126dcc7bea7437c04d1f10eacd4a16"]="setup_bun.js (Shai-Hulud 2.0)"
-  ["d60ec97eea19fffb4809bc35b91033b52490ca11"]="bun_environment.js (Shai-Hulud 2.0)"
-  ["3d7570d14d34b0ba137d502f042b27b0f37a59fa"]="bun_environment.js variant (Shai-Hulud 2.0)"
-)
+check_mal_sha1() {
+  local hash="$1"
+  case "$hash" in
+    "d1829b4708126dcc7bea7437c04d1f10eacd4a16")
+      echo "setup_bun.js (Shai-Hulud 2.0)"
+      return 0
+      ;;
+    "d60ec97eea19fffb4809bc35b91033b52490ca11")
+      echo "bun_environment.js (Shai-Hulud 2.0)"
+      return 0
+      ;;
+    "3d7570d14d34b0ba137d502f042b27b0f37a59fa")
+      echo "bun_environment.js variant (Shai-Hulud 2.0)"
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
-declare -A FINDINGS
 FINDING_LIST=()
 
 log_section() { echo; echo "---- $1 ----"; }
@@ -211,27 +286,55 @@ add_finding() {
   FINDING_LIST+=("$type|$indicator|$location")
 }
 
-trim() {
-  local s="$1"
-  s="${s#"${s%%[![:space:]]*}"}"
-  s="${s%"${s##*[![:space:]]}"}"
-  printf '%s' "$s"
-}
-
-escape_regex() {
-  local s="$1"
-  s="${s//\\/\\\\}"; s="${s//\./\\.}"; s="${s//\*/\\*}"; s="${s//\+/\\+}"
-  s="${s//\?/\\?}"; s="${s//\^/\\^}"; s="${s//\$/\\$}"; s="${s//\[/\\[}"
-  s="${s//\]/\\]}"; s="${s//\(/\\(}"; s="${s//\)/\\)}"; s="${s//\{/\\{}"
-  s="${s//\}/\\}}"; s="${s//\|/\\|}"; s="${s//\//\\/}"
-  s="${s//:/[:_-]}"
-  printf '%s' "$s"
-}
-
-declare -A COMP_UNSCOPED
-declare -A COMP_SCOPED
-declare -A COMP_SCOPES
+COMP_UNSCOPED=()
+COMP_SCOPED=()
+COMP_SCOPES=()
 COMPROMISED_REGEX=""
+
+# Helper functions for checking compromised packages (bash 3.2 compatible)
+is_compromised_unscoped() {
+  local pkg="$1"
+  local item
+  if [ ${#COMP_UNSCOPED[@]} -eq 0 ]; then
+    return 1
+  fi
+  for item in "${COMP_UNSCOPED[@]}"; do
+    if [ "$item" = "$pkg" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_compromised_scoped() {
+  local scope="$1"
+  local name="$2"
+  local key="$scope|$name"
+  local item
+  if [ ${#COMP_SCOPED[@]} -eq 0 ]; then
+    return 1
+  fi
+  for item in "${COMP_SCOPED[@]}"; do
+    if [ "$item" = "$key" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+has_compromised_scope() {
+  local scope="$1"
+  local item
+  if [ ${#COMP_SCOPES[@]} -eq 0 ]; then
+    return 1
+  fi
+  for item in "${COMP_SCOPES[@]}"; do
+    if [ "$item" = "$scope" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 is_cache_valid() {
   local cache_file="$1"
@@ -287,19 +390,19 @@ load_compromised_packages() {
     if [[ "$token" == @*/* ]]; then
       local scope="${token%%/*}"
       local name="${token#*/}"
-      COMP_SCOPED["$scope|$name"]=1
-      COMP_SCOPES["$scope"]=1
+      COMP_SCOPED+=("$scope|$name")
+      COMP_SCOPES+=("$scope")
     else
-      COMP_UNSCOPED["$token"]=1
+      COMP_UNSCOPED+=("$token")
     fi
   done <"$tmpfile"
   rm -f "$tmpfile"
 
   local patterns=()
-  for pkg in "${!COMP_UNSCOPED[@]}"; do
+  for pkg in "${COMP_UNSCOPED[@]}"; do
     patterns+=("$(escape_regex "$pkg")")
   done
-  for key in "${!COMP_SCOPED[@]}"; do
+  for key in "${COMP_SCOPED[@]}"; do
     local scope="${key%%|*}"; local name="${key#*|}"
     patterns+=("$(escape_regex "$scope/$name")")
   done
@@ -335,41 +438,39 @@ find_node_modules() {
 scan_node_modules() {
   local nm_dirs=("$@")
   local total=${#nm_dirs[@]}
-  local current=0
-  local progress_update=50
   
-  echo "[*] Scanning $total node_modules directories..."
+  echo "[*] Scanning $total node_modules directories in parallel..."
   
-  for nm in "${nm_dirs[@]}"; do
-    ((current++))
-    
-    # Update progress less frequently
-    if (( current % progress_update == 0 )) || (( current == total )); then
-      printf "[*] Progress: %d/%d directories scanned...\n" "$current" "$total" >&2
-    fi
-    
-    [[ -d "$nm" ]] || continue
-    while IFS= read -r -d '' child; do
-      local name
-      name="$(basename "$child")"
-      if [[ "$name" == @* ]]; then
-        [[ -z "${COMP_SCOPES[$name]:-}" ]] && continue
-        while IFS= read -r -d '' pkgdir; do
-          local pkgname
-          pkgname="$(basename "$pkgdir")"
-          if [[ -n "${COMP_SCOPED["$name|$pkgname"]:-}" ]]; then
-            add_finding "node_modules" "$name/$pkgname" "$pkgdir"
-            echo "    [!] FOUND: $name/$pkgname at $nm"
-          fi
-        done < <(find "$child" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
-      else
-        if [[ -n "${COMP_UNSCOPED[$name]:-}" ]]; then
-          add_finding "node_modules" "$name" "$child"
-          echo "    [!] FOUND: $name at $nm"
-        fi
-      fi
-    done < <(find "$nm" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
-  done
+  local tmpfile_results="$(mktemp)"
+  local tmpfile_count="$(mktemp)"
+  local tmpfile_unscoped="$(mktemp)"
+  local tmpfile_scoped="$(mktemp)"
+  local tmpfile_scopes="$(mktemp)"
+  
+  # Write package lists to temp files for workers to read
+  printf '%s\n' "${COMP_UNSCOPED[@]}" > "$tmpfile_unscoped"
+  printf '%s\n' "${COMP_SCOPED[@]}" > "$tmpfile_scoped"
+  printf '%s\n' "${COMP_SCOPES[@]}" > "$tmpfile_scopes"
+  
+  # Process directories in parallel with progress using helper
+  printf '%s\n' "${nm_dirs[@]}" | \
+    parallel_with_progress "Scanning node_modules" "$total" 10 "bash -c '
+      check_node_modules_dir \"\$1\" \"'$tmpfile_unscoped'\" \"'$tmpfile_scoped'\" \"'$tmpfile_scopes'\"
+    ' _" "$tmpfile_results" "$tmpfile_count"
+  
+  rm -f "$tmpfile_unscoped" "$tmpfile_scoped" "$tmpfile_scopes" "$tmpfile_count"
+  
+  # Process results
+  local found=0
+  while IFS='|' read -r type desc location; do
+    [[ -z "$type" ]] && continue
+    ((found++))
+    add_finding "$type" "$desc" "$location"
+    echo "    [!] FOUND: $desc at $location"
+  done < "$tmpfile_results"
+  
+  rm -f "$tmpfile_results"
+  echo "[*] Scanned $total node_modules directories (found $found compromised packages)"
 }
 
 scan_npm_cache() {
@@ -377,16 +478,47 @@ scan_npm_cache() {
   [[ -n "$cache_path" && -d "$cache_path" ]] || { echo "[*] npm cache path not detected."; return; }
   [[ -z "$COMPROMISED_REGEX" ]] && return
   echo "[*] Scanning npm cache at: $cache_path"
-  echo "[*] Searching for compromised packages in cache..."
+  echo "[*] Searching for compromised packages in cache (parallel mode)..."
+  
+  local num_cores
+  num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
+  local parallel_jobs=$((num_cores * 2))
+  
+  local tmpfile_results="$(mktemp)"
+  local tmpfile_regex="$(mktemp)"
+  local tmpfile_count="$(mktemp)"
+  echo "$COMPROMISED_REGEX" > "$tmpfile_regex"
+  
+  # Count total directories first
+  local total_dirs
+  total_dirs=$(find "$cache_path" -type d -print 2>/dev/null | wc -l | tr -d ' ')
+  echo "[*] Scanning $total_dirs npm cache directories..."
+  
+  # Parallel scan with progress using helper
+  find "$cache_path" -type d -print 2>/dev/null | \
+    parallel_with_progress "Scanning npm cache" "$total_dirs" auto "bash -c '
+      dir=\"\$1\"
+      regex=\"$COMPROMISED_REGEX\"
+      if [[ \"\$dir\" =~ \$regex ]]; then
+        echo \"npm-cache|\${BASH_REMATCH[0]}|\$dir\"
+      fi
+    ' _" "$tmpfile_results" "$tmpfile_count"
+  
+  rm -f "$tmpfile_regex"
+  
+  # Process results
   local checked=0
-  while IFS= read -r -d '' dir; do
+  while IFS='|' read -r type desc location; do
+    [[ -z "$type" ]] && continue
     ((checked++))
-    if [[ "$dir" =~ $COMPROMISED_REGEX ]]; then
-      add_finding "npm-cache" "${BASH_REMATCH[0]}" "$dir"
-      echo "    [!] FOUND in cache: ${BASH_REMATCH[0]}"
-    fi
-  done < <(find "$cache_path" -type d -print0 2>/dev/null)
-  echo "[*] Checked $checked cached package directories"
+    add_finding "$type" "$desc" "$location"
+    echo "    [!] FOUND in cache: $desc"
+  done < "$tmpfile_results"
+  
+  local total_scanned
+  total_scanned=$(wc -l < "$tmpfile_count" 2>/dev/null | tr -d ' ')
+  rm -f "$tmpfile_results" "$tmpfile_count"
+  echo "[*] Scanned $total_scanned npm cache directories (found $checked compromised packages)"
 }
 
 scan_malicious_files() {
@@ -421,6 +553,11 @@ scan_git() {
   local roots=("$@")
   local repos_checked=0
   echo "[*] Searching for git repositories and analyzing branches/remotes..."
+  
+  local num_cores
+  num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
+  local parallel_jobs=$((num_cores * 2))
+  
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == "quick" ]]; then
@@ -449,23 +586,29 @@ scan_git() {
         fi
       done
     else
-      while IFS= read -r -d '' gitdir; do
-        ((repos_checked++))
-        local repo
-        repo="$(dirname "$gitdir")"
-        branches=$(git -C "$repo" branch -a 2>/dev/null || true)
-        remotes=$(git -C "$repo" remote -v 2>/dev/null || true)
-        for b in $branches; do
-          for pat in "${SUSPICIOUS_BRANCH_PATTERNS[@]}"; do
-            if [[ "$b" == *"$pat"* ]]; then
-              add_finding "git-branch" "Branch: $b" "$repo"
-            fi
-          done
-        done
-        if [[ "$remotes" == *"Shai-Hulud"* ]]; then
-          add_finding "git-remote" "Remote contains 'Shai-Hulud'" "$repo"
-        fi
-      done < <(find "$root" -type d -name .git -print0 2>/dev/null)
+      local tmpfile_results="$(mktemp)"
+      local tmpfile_count="$(mktemp)"
+      
+      # Count total git repos first
+      local total_repos
+      total_repos=$(find "$root" -type d -name .git -print 2>/dev/null | wc -l | tr -d ' ')
+      echo "[*] Scanning $total_repos git repositories in parallel (using $parallel_jobs workers)..."
+      
+      # Parallel git repo scanning with progress using helper
+      find "$root" -type d -name .git -print 2>/dev/null | \
+        parallel_with_progress "Checking git repos" "$total_repos" 10 "check_git_repo" "$tmpfile_results" "$tmpfile_count"
+      
+      # Process results
+      local found=0
+      while IFS='|' read -r type desc location; do
+        [[ -z "$type" ]] && continue
+        ((found++))
+        add_finding "$type" "$desc" "$location"
+        echo "    [!] FOUND: $desc at $location"
+      done < "$tmpfile_results"
+      
+      repos_checked=$(wc -l < "$tmpfile_count" 2>/dev/null | tr -d ' ')
+      rm -f "$tmpfile_results" "$tmpfile_count"
     fi
   done
   echo "[*] Analyzed $repos_checked git repositories"
@@ -473,59 +616,115 @@ scan_git() {
 
 scan_workflows() {
   local roots=("$@")
-  local scanned=0
   echo "[*] Searching for GitHub Actions workflow files..."
+  
+  local num_cores
+  num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
+  local parallel_jobs=$((num_cores * 2))
+  
+  local tmpfile_results="$(mktemp)"
+  local tmpfile_patterns="$(mktemp)"
+  local tmpfile_count="$(mktemp)"
+  printf '%s\n' "${SUSPICIOUS_WORKFLOW_PATTERNS[@]}" > "$tmpfile_patterns"
+  
+  # Count total workflow files first
+  local total_workflows=0
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
-    while IFS= read -r -d '' wfdir; do
-      while IFS= read -r -d '' wf; do
-        ((scanned++))
-        local base
-        base="$(basename "$wf")"
-        if [[ "$base" =~ ^formatter_[0-9]+\.yml$ ]]; then
-          add_finding "workflow-pattern" "Suspicious workflow name: $base" "$wf"
-          echo "    [!] SUSPICIOUS workflow: $wf"
-        fi
-        local content
-        content="$(cat "$wf" 2>/dev/null || true)"
-        for pat in "${SUSPICIOUS_WORKFLOW_PATTERNS[@]}"; do
-          if [[ "$content" == *"$pat"* ]]; then
-            add_finding "workflow-content" "Workflow contains: $pat" "$wf"
-            break
-          fi
-        done
-      done < <(find "$wfdir" -maxdepth 1 -type f \( -name "*.yml" -o -name "*.yaml" \) -print0 2>/dev/null)
-    done < <(find "$root" -type d -path "*/.github/workflows" -print0 2>/dev/null)
+    total_workflows=$((total_workflows + $(find "$root" -type d -path "*/.github/workflows" -exec find {} -maxdepth 1 -type f \( -name "*.yml" -o -name "*.yaml" \) -print \; 2>/dev/null | wc -l | tr -d ' ')))
   done
-  echo "[*] Scanned $scanned workflow files"
+  echo "[*] Scanning $total_workflows workflow files in parallel (using $parallel_jobs workers)..."
+  
+  for root in "${roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    
+    # Find all workflow files and scan in parallel with progress using helper
+    find "$root" -type d -path "*/.github/workflows" -exec find {} -maxdepth 1 -type f \( -name "*.yml" -o -name "*.yaml" \) -print \; 2>/dev/null | \
+      parallel_with_progress "Scanning workflows" "$total_workflows" 10 "bash -c 'check_workflow_file \"\$1\" \"$tmpfile_patterns\"' _" "$tmpfile_results" "$tmpfile_count"
+  done
+  
+  rm -f "$tmpfile_patterns"
+  
+  # Process results
+  local found=0
+  while IFS='|' read -r type desc location; do
+    [[ -z "$type" ]] && continue
+    ((found++))
+    add_finding "$type" "$desc" "$location"
+    echo "    [!] SUSPICIOUS workflow: $location"
+  done < "$tmpfile_results"
+  
+  local scanned
+  scanned=$(wc -l < "$tmpfile_count" 2>/dev/null | tr -d ' ')
+  rm -f "$tmpfile_results" "$tmpfile_count"
+  echo "[*] Scanned $scanned workflow files (found $found suspicious workflows)"
 }
 
 scan_credentials() {
   local mode="$1"; shift
   local roots=("$@")
   local found=0
+  
+  # Count total credential paths to check
+  local total_creds=$((${#roots[@]} * ${#CLOUD_CREDENTIAL_PATHS[@]}))
   echo "[*] Checking for exposed cloud credentials and .env files..."
+  echo "[*] Scanning ${#CLOUD_CREDENTIAL_PATHS[@]} credential paths across ${#roots[@]} root(s)"
+  
+  local checked=0
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     for cred in "${CLOUD_CREDENTIAL_PATHS[@]}"; do
+      ((checked++))
+      if (( checked % 5 == 0 )) || (( checked == total_creds )); then
+        printf "\r[*] Checking credentials: %d/%d paths..." "$checked" "$total_creds" >&2
+      fi
       local path="$root/$cred"
       if [[ -e "$path" ]]; then
         add_finding "credential-file" "$cred" "$path"
         ((found++))
       fi
     done
-    if [[ "$mode" == "full" ]]; then
-      while IFS= read -r -d '' envfile; do
+  done
+  printf "\n" >&2
+  
+  if [[ "$mode" == "full" ]]; then
+    local tmpfile_results="$(mktemp)"
+    local tmpfile_count="$(mktemp)"
+    
+    # Count total .env files
+    local total_env=0
+    for root in "${roots[@]}"; do
+      [[ -d "$root" ]] || continue
+      total_env=$((total_env + $(find "$root" -type f -name ".env*" ! -path "*/node_modules/*" -print 2>/dev/null | wc -l | tr -d ' ')))
+    done
+    
+    if [[ $total_env -gt 0 ]]; then
+      echo "[*] Found $total_env .env files to check"
+      
+      for root in "${roots[@]}"; do
+        [[ -d "$root" ]] || continue
+        find "$root" -type f -name ".env*" ! -path "*/node_modules/*" -print 2>/dev/null | \
+          parallel_with_progress "Checking .env files" "$total_env" auto "echo" "$tmpfile_results" "$tmpfile_count"
+      done
+      
+      while IFS= read -r envfile; do
+        [[ -n "$envfile" ]] || continue
         add_finding "credential-file" ".env file" "$envfile"
         ((found++))
-      done < <(find "$root" -type f -name ".env*" ! -path "*/node_modules/*" -print0 2>/dev/null)
-    else
+      done < "$tmpfile_results"
+      
+      rm -f "$tmpfile_results" "$tmpfile_count"
+    fi
+  else
+    for root in "${roots[@]}"; do
+      [[ -d "$root" ]] || continue
       if [[ -f "$root/.env" ]]; then
         add_finding "credential-file" ".env file" "$root/.env"
         ((found++))
       fi
-    fi
-  done
+    done
+  fi
+  
   echo "[*] Credential scan complete (found $found files)"
 }
 
@@ -587,58 +786,74 @@ PY
 )"
     else
       # Parallel processing for full mode
-      local num_cores
-      num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
-      local parallel_jobs=$((num_cores * 2))
-      
-      local tmpfile_list="$(mktemp)"
       local tmpfile_results="$(mktemp)"
-      find "$root" -type f -name "package.json" ! -path "*/node_modules/*/node_modules/*" -print0 2>/dev/null > "$tmpfile_list" || true
-      local total_files=$(grep -c -z '' < "$tmpfile_list" 2>/dev/null || echo 0)
-      echo "[*] Found $total_files package.json files to scan (using $parallel_jobs workers)"
+      local tmpfile_count="$(mktemp)"
+      local tmpfile_patterns="$(mktemp)"
+      printf '%s\n' "${SUSPICIOUS_HOOK_PATTERNS[@]}" > "$tmpfile_patterns"
       
-      # Export patterns for worker function
-      export SUSPICIOUS_HOOK_PATTERNS_STR="${SUSPICIOUS_HOOK_PATTERNS[*]}"
+      # Count total package.json files first
+      local total_hooks
+      total_hooks=$(find "$root" -type f -name "package.json" ! -path "*/node_modules/*/node_modules/*" -print 2>/dev/null | wc -l | tr -d ' ')
+      echo "[*] Scanning $total_hooks package.json files in parallel..."
       
-      # Parallel scan using xargs
-      xargs -0 -P "$parallel_jobs" -I {} bash -c '
-        pkg="$1"
-        shift
-        patterns=("$@")
-        python3 - "$pkg" "${patterns[@]}" 2>/dev/null <<"PY"
-import json, sys, pathlib
-pkg = pathlib.Path(sys.argv[1])
-pats = sys.argv[2:]
-try:
-    data = json.load(open(pkg, "r", encoding="utf-8"))
-except Exception:
-    sys.exit(0)
-scripts = data.get("scripts") or {}
-for hook in ("postinstall","preinstall","install","prepare"):
-    val = scripts.get(hook)
-    if not isinstance(val, str):
-        continue
-    for pat in pats:
-        if pat in val:
-            print(f"{hook}|{pat}|{val}|{pkg}")
-            sys.exit(0)
-PY
-      ' _ {} ${SUSPICIOUS_HOOK_PATTERNS[@]} < "$tmpfile_list" >> "$tmpfile_results"
+      # Use parallel_with_progress helper
+      find "$root" -type f -name "package.json" ! -path "*/node_modules/*/node_modules/*" -print 2>/dev/null | \
+        parallel_with_progress "Checking package hooks" "$total_hooks" auto "check_package_hooks \"\$1\" \"$tmpfile_patterns\"" "$tmpfile_results" "$tmpfile_count"
+      
+      rm -f "$tmpfile_patterns"
       
       # Process results
+      local found=0
       while IFS='|' read -r hook pat content pkg; do
         [[ -z "$hook" ]] && continue
+        ((found++))
         add_finding "postinstall-hook" "Suspicious $hook: $pat" "$pkg"
         echo "    [!] FOUND: Suspicious $hook in $(basename "$(dirname "$pkg")")"
         printf '    Hook content: %s\n' "$content"
       done < "$tmpfile_results"
       
-      rm -f "$tmpfile_list" "$tmpfile_results"
-      unset SUSPICIOUS_HOOK_PATTERNS_STR
-      done < <(find "$root" -type f -name "package.json" ! -path "*/node_modules/*/node_modules/*" -print0 2>/dev/null)
+      rm -f "$tmpfile_results" "$tmpfile_count"
+      echo "[*] Checked $total_hooks package.json files for suspicious hooks (found $found suspicious hooks)"
     fi
   done
 }
+
+# Worker function for parallel node_modules checking
+check_node_modules_dir() {
+  local nm="$1"
+  local unscoped_file="$2"
+  local scoped_file="$3"
+  local scopes_file="$4"
+  
+  [[ -d "$nm" ]] || return 0
+  
+  # Check each package in this node_modules directory
+  find "$nm" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | while IFS= read -r -d '' child; do
+    local name
+    name="$(basename "$child")"
+    
+    if [[ "$name" == @* ]]; then
+      # Scoped package - check if scope is in our list
+      if grep -Fxq "$name" "$scopes_file" 2>/dev/null; then
+        # Check each package under this scope
+        find "$child" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | while IFS= read -r -d '' pkgdir; do
+          local pkgname
+          pkgname="$(basename "$pkgdir")"
+          local key="$name|$pkgname"
+          if grep -Fxq "$key" "$scoped_file" 2>/dev/null; then
+            echo "node_modules|$name/$pkgname|$pkgdir"
+          fi
+        done
+      fi
+    else
+      # Unscoped package
+      if grep -Fxq "$name" "$unscoped_file" 2>/dev/null; then
+        echo "node_modules|$name|$child"
+      fi
+    fi
+  done
+}
+export -f check_node_modules_dir
 
 # Worker function for parallel hash checking
 check_file_hash() {
@@ -663,9 +878,139 @@ check_file_hash() {
   fi
 }
 
-export -f check_file_hash
+# Worker function for parallel git repository checking
+check_git_repo() {
+  local gitdir="$1"
+  local repo
+  repo="$(dirname "$gitdir")"
+  local branches
+  branches=$(git -C "$repo" branch -a 2>/dev/null || true)
+  local remotes
+  remotes=$(git -C "$repo" remote -v 2>/dev/null || true)
+  
+  for b in $branches; do
+    for pat in shai-hulud shai_hulud SHA1HULUD; do
+      if [[ "$b" == *"$pat"* ]]; then
+        echo "git-branch|Branch: $b|$repo"
+        return 0
+      fi
+    done
+  done
+  
+  if [[ "$remotes" == *"Shai-Hulud"* ]]; then
+    echo "git-remote|Remote contains 'Shai-Hulud'|$repo"
+  fi
+}
+
+# Worker function for parallel workflow checking
+check_workflow_file() {
+  local wf="$1"
+  local patterns_file="$2"
+  local base
+  base="$(basename "$wf")"
+  
+  if [[ "$base" =~ ^formatter_[0-9]+\.yml$ ]]; then
+    echo "workflow-pattern|Suspicious workflow name: $base|$wf"
+  fi
+  
+  local content
+  content="$(cat "$wf" 2>/dev/null || true)"
+  while IFS= read -r pat; do
+    [[ -z "$pat" ]] && continue
+    if [[ "$content" == *"$pat"* ]]; then
+      echo "workflow-content|Workflow contains: $pat|$wf"
+      return 0
+    fi
+  done < "$patterns_file"
+}
+
+# Worker function for parallel package.json hooks checking
+check_package_hooks() {
+  local pkg="$1"
+  local patterns_file="$2"
+  python3 - "$pkg" "$patterns_file" 2>/dev/null <<'PY'
+import json, sys, pathlib
+pkg = pathlib.Path(sys.argv[1])
+patterns_file = sys.argv[2]
+with open(patterns_file, "r") as f:
+    pats = [line.strip() for line in f if line.strip()]
+try:
+    data = json.load(open(pkg, "r", encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+scripts = data.get("scripts") or {}
+for hook in ("postinstall","preinstall","install","prepare"):
+    val = scripts.get(hook)
+    if not isinstance(val, str):
+        continue
+    for pat in pats:
+        if pat in val:
+            print(f"{hook}|{pat}|{val}|{pkg}")
+            sys.exit(0)
+PY
+}
+
+export -f check_file_hash check_git_repo check_workflow_file check_package_hooks
 export MAL_SHA256
 export MAL_SHA1
+
+# Parallel processing helper with progress tracking and pv support
+# Processes stdin (newline-separated items), shows progress, executes worker in parallel
+# Usage: parallel_with_progress <description> <total_count> <update_freq> <worker_function> <tmpfile_results> <tmpfile_count>
+parallel_with_progress() {
+  local description="$1"
+  local total_count="$2"
+  local update_freq="$3"
+  local worker_function="$4"
+  local tmpfile_results="$5"
+  local tmpfile_count="$6"
+  
+  local num_cores
+  num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
+  local parallel_jobs=$((num_cores * 2))
+  
+  # Use core count as update frequency if passed as 'auto'
+  if [[ "$update_freq" == "auto" ]]; then
+    update_freq=$num_cores
+  fi
+  
+  # Check if pv is available for better progress display (check common locations for sudo compatibility)
+  local pv_cmd=""
+  if command -v pv >/dev/null 2>&1; then
+    pv_cmd="pv"
+  elif [[ -x /usr/bin/pv ]]; then
+    pv_cmd="/usr/bin/pv"
+  elif [[ -x /usr/local/bin/pv ]]; then
+    pv_cmd="/usr/local/bin/pv"
+  fi
+  
+  if [[ -n "$pv_cmd" ]] && [[ $total_count -gt 0 ]]; then
+    # Use pv for clean progress bars with ETA
+    "$pv_cmd" -l -s "$total_count" -N "$description" 2>&2 | \
+      xargs -n 1 -P "$parallel_jobs" -I {} bash -c "$worker_function"' "$@"' _ {} >> "$tmpfile_results" 2>/dev/null &
+    local xargs_pid=$!
+    BG_PIDS+=("$xargs_pid")
+    wait "$xargs_pid" 2>/dev/null || true
+  else
+    # Fallback to manual progress tracking with while loop
+    while IFS= read -r item; do
+      local count
+      count=$(wc -l < "$tmpfile_count" 2>/dev/null | tr -d ' ' || echo 0)
+      if (( count % update_freq == 0 )) || (( count == total_count )); then
+        printf "\r[*] %s: %d/%d..." "$description" "$count" "$total_count" 2>/dev/null >&2 || true
+      fi
+      printf '%s\0' "$item"
+    done 2>/dev/null | \
+      xargs -0 -n 1 -P "$parallel_jobs" bash -c '
+        '"$worker_function"' "$1"
+        echo "1" >> "'"$tmpfile_count"'"
+      ' _ {} >> "$tmpfile_results" 2>/dev/null &
+    local xargs_pid=$!
+    BG_PIDS+=("$xargs_pid")
+    wait "$xargs_pid" 2>/dev/null || true
+    printf "\n" 2>/dev/null >&2 || true
+  fi
+}
 
 scan_hashes() {
   local mode="$1"; shift
@@ -676,53 +1021,99 @@ scan_hashes() {
   
   echo "[*] Using $parallel_jobs parallel workers for hash scanning"
   
-  local tmpfile
-  tmpfile=$(mktemp)
+  local tmpfile_results="$(mktemp)"
+  local tmpfile_count="$(mktemp)"
   
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == "quick" ]]; then
-      find "$root" \( -path "*/node_modules/*/node_modules/*" -prune \) -o -type f \( $(printf -- '-name %q -o ' "${SUSPICIOUS_NAMES[@]}") -false \) -print0 2>/dev/null | \
-        xargs -0 -P "$parallel_jobs" -I {} bash -c 'check_file_hash "$@"' _ {} >> "$tmpfile"
+      # Count total files first
+      local total_quick
+      total_quick=$(find "$root" \( -path "*/node_modules/*/node_modules/*" -prune \) -o -type f \( $(printf -- '-name %q -o ' "${SUSPICIOUS_NAMES[@]}") -false \) -print 2>/dev/null | wc -l | tr -d ' ')
+      echo "[*] Found $total_quick suspicious files to hash"
+      
+      find "$root" \( -path "*/node_modules/*/node_modules/*" -prune \) -o -type f \( $(printf -- '-name %q -o ' "${SUSPICIOUS_NAMES[@]}") -false \) -print 2>/dev/null | \
+        parallel_with_progress "Hashing files" "$total_quick" auto "check_file_hash" "$tmpfile_results" "$tmpfile_count"
     else
-      find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" \) -print0 2>/dev/null | \
-        xargs -0 -P "$parallel_jobs" -I {} bash -c 'check_file_hash "$@"' _ {} >> "$tmpfile"
+      # Count total files first
+      local total_full
+      total_full=$(find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" \) -print 2>/dev/null | wc -l | tr -d ' ')
+      echo "[*] Found $total_full JS/TS files to hash"
+      
+      find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" \) -print 2>/dev/null | \
+        parallel_with_progress "Hashing files" "$total_full" auto "check_file_hash" "$tmpfile_results" "$tmpfile_count"
     fi
   done
   
   # Process results
-  local scanned=0
+  local found=0
   while IFS='|' read -r type desc location; do
     if [[ -n "$type" ]]; then
       add_finding "$type" "$desc" "$location"
       echo "    [!!!] MALWARE DETECTED: $location"
-      ((scanned++))
+      ((found++))
     fi
-  done < "$tmpfile"
+  done < "$tmpfile_results"
   
   local total_files
-  total_files=$(find "${roots[@]}" -type f \( -name "*.js" -o -name "*.ts" \) 2>/dev/null | wc -l | tr -d ' ')
-  echo "[*] Hashed $total_files files for malware detection (found $scanned malicious files)"
+  total_files=$(wc -l < "$tmpfile_count" 2>/dev/null | tr -d ' ')
+  echo "[*] Hashed $total_files files for malware detection (found $found malicious files)"
   
-  rm -f "$tmpfile"
+  rm -f "$tmpfile_results" "$tmpfile_count"
 }
 
 scan_migration_suffix() {
   local roots=("$@")
+  echo "[*] Checking for migration attack patterns..."
+  
+  local tmpfile_results="$(mktemp)"
+  local tmpfile_count="$(mktemp)"
+  local checked=0
+  
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
-    while IFS= read -r -d '' gitdir; do
-      local repo
-      repo="$(dirname "$gitdir")"
-      remotes=$(git -C "$repo" remote -v 2>/dev/null || true)
-      if echo "$remotes" | grep -qi "\-migration"; then
-        add_finding "migration-attack" "Remote URL contains '-migration'" "$repo"
-      fi
-    done < <(find "$root" -type d -name .git -print0 2>/dev/null)
-    while IFS= read -r -d '' dir; do
-      add_finding "migration-attack" "Directory ends with -migration" "$dir"
-    done < <(find "$root" -type d -name "*-migration" -print0 2>/dev/null)
+    
+    # Count items to scan
+    local total_git total_dirs total_items
+    total_git=$(find "$root" -type d -name .git -print 2>/dev/null | wc -l | tr -d ' ')
+    total_dirs=$(find "$root" -type d -name "*-migration" -print 2>/dev/null | wc -l | tr -d ' ')
+    total_items=$((total_git + total_dirs))
+    
+    if [[ $total_items -gt 0 ]]; then
+      echo "[*] Scanning $total_items locations for migration patterns..."
+      
+      # Check git repos with progress
+      find "$root" -type d -name .git -print 2>/dev/null | \
+        parallel_with_progress "Checking git repos" "$total_git" 10 "bash -c '
+          gitdir=\"\$1\"
+          repo=\"\$(dirname \"\$gitdir\")\"
+          remotes=\$(git -C \"\$repo\" remote -v 2>/dev/null || true)
+          if echo \"\$remotes\" | grep -qi \"\\\-migration\"; then
+            echo \"migration-attack|Remote URL contains '\''\\-migration'\''|\$repo\"
+          fi
+        ' _" "$tmpfile_results" "$tmpfile_count"
+      
+      # Reset count for directories
+      > "$tmpfile_count"
+      
+      # Check directories with progress
+      find "$root" -type d -name "*-migration" -print 2>/dev/null | \
+        parallel_with_progress "Checking directories" "$total_dirs" 10 "bash -c '
+          echo \"migration-attack|Directory ends with -migration|\$1\"
+        ' _" "$tmpfile_results" "$tmpfile_count"
+    fi
   done
+  
+  # Process results
+  while IFS='|' read -r type desc location; do
+    [[ -z "$type" ]] && continue
+    ((checked++))
+    add_finding "$type" "$desc" "$location"
+    echo "    [!] FOUND: $desc at $location"
+  done < "$tmpfile_results"
+  
+  rm -f "$tmpfile_results" "$tmpfile_count"
+  echo "[*] Checked for migration attacks (found $checked indicators)"
 }
 
 scan_trufflehog() {
@@ -769,14 +1160,21 @@ scan_env_patterns() {
   num_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4)
   local parallel_jobs=$((num_cores * 2))
   
-  echo "[*] Scanning for env+exfil patterns (using $parallel_jobs workers)"
-  
   local tmpfile_results="$(mktemp)"
+  local tmpfile_count="$(mktemp)"
+  
+  # Count total files to scan first
+  local total_files=0
+  for root in "${roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    total_files=$((total_files + $(find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" -o -name "*.py" -o -name "*.sh" -o -name "*.ps1" \) -print 2>/dev/null | wc -l | tr -d ' ')))
+  done
+  echo "[*] Scanning $total_files code files for env+exfil patterns (using $parallel_jobs workers)"
   
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
-    find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" -o -name "*.py" -o -name "*.sh" -o -name "*.ps1" \) -print0 2>/dev/null | \
-      xargs -0 -P "$parallel_jobs" -I {} bash -c 'check_env_patterns "$@"' _ {} >> "$tmpfile_results"
+    find "$root" \( -path "*/node_modules/*" -o -name "*.d.ts" \) -prune -false -o -type f \( -name "*.js" -o -name "*.ts" -o -name "*.py" -o -name "*.sh" -o -name "*.ps1" \) -print 2>/dev/null | \
+      parallel_with_progress "Scanning for env patterns" "$total_files" auto "check_env_patterns" "$tmpfile_results" "$tmpfile_count"
   done
   
   # Process results
@@ -788,8 +1186,10 @@ scan_env_patterns() {
     echo "    [!] SUSPICIOUS env+exfil: $location"
   done < "$tmpfile_results"
   
-  rm -f "$tmpfile_results"
-  echo "[*] Env+exfil pattern scan complete (found $count issues)"
+  local total_scanned
+  total_scanned=$(wc -l < "$tmpfile_count" 2>/dev/null | tr -d ' ')
+  rm -f "$tmpfile_results" "$tmpfile_count"
+  echo "[*] Scanned $total_scanned code files (found $count env+exfil issues)"
 }
 
 main() {

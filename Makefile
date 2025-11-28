@@ -9,7 +9,7 @@ all: clean build
 clean:
 	rm -rf $(BUILD_DIR)
 
-build: build-linux build-darwin build-windows
+build: clean build-linux build-darwin build-windows quick install
 
 build-linux:
 	@echo "Building for Linux..."

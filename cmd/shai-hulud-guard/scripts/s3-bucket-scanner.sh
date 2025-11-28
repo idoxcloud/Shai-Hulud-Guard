@@ -4,6 +4,9 @@ set -o pipefail
 set -o noclobber
 set -o nounset
 
+# SHAI_HULUD_SCANNER_SAFE - This file is part of the Shai-Hulud scanner itself
+# Files containing this marker will be excluded from malware detection scans
+
 # Detect Bash version for compatibility
 BASH_MAJOR_VERSION="${BASH_VERSINFO[0]}"
 

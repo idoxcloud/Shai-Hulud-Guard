@@ -1,6 +1,9 @@
 <#
     Check-ShaiHulud-Dynamic.ps1
     ---------------------------
+    SHAI_HULUD_SCANNER_SAFE - This file is part of the Shai-Hulud scanner itself
+    Files containing this marker will be excluded from malware detection scans
+    
     Comprehensive Shai-Hulud detection script for Windows.
     Detects both original Shai-Hulud (Sept 2025) and Shai-Hulud 2.0 (Nov 2025) IOCs.
 

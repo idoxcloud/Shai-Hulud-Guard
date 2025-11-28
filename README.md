@@ -181,7 +181,7 @@ The scanner performs the following security checks:
 |-------|------------|-----------|-------------|
 | Compromised npm packages | Yes | Yes | Fetches live IOC feeds and scans `node_modules` |
 | npm cache scan | No | Yes | Scans npm cache for compromised packages |
-| Malicious file artefacts | Yes | Yes | Detects known Shai-Hulud files (`shai-hulud.js`, `setup_bun.js`, etc.) |
+| Malicious file artifacts | Yes | Yes | Detects known Shai-Hulud files (`shai-hulud.js`, `setup_bun.js`, etc.) |
 | Git branch/remote analysis | Yes | Yes | Checks for suspicious branches and remotes |
 | GitHub Actions workflows | Yes | Yes | Scans for malicious workflow patterns |
 | Cloud credential exposure | Partial | Yes | Detects AWS/Azure/npm credential files |

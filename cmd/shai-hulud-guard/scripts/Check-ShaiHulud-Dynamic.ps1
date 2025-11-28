@@ -12,7 +12,7 @@
     1. [Quick+Full] Fetches latest lists of compromised npm packages from remote sources
     2. [Quick+Full] Scans node_modules directories for compromised packages
     3. [Full only]  Scans npm cache for compromised packages
-    4. [Quick+Full] Checks for known Shai-Hulud artefact files
+    4. [Quick+Full] Checks for known Shai-Hulud artifact files
     5. [Quick+Full] Scans git repositories for suspicious branches and remotes
     6. [Quick+Full] Scans GitHub Actions workflows for malicious patterns
     7. [Quick+Full] Detects cloud credential files (Quick: direct paths only)
@@ -214,7 +214,7 @@ if (-not (Test-Path $CacheDir)) {
     New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
 }
 
-# Known Shai-Hulud artefact filenames (workflows / payloads).
+# Known Shai-Hulud artifact filenames (workflows / payloads).
 # Updated to include Shai-Hulud 2.0 IOCs (November 2025)
 $MaliciousFileNames = @(
     # Original Shai-Hulud (September 2025)
@@ -647,9 +647,9 @@ function Scan-For-MaliciousFiles {
         if (-not (Test-Path $root)) { continue }
 
         if ($QuickMode) {
-            Write-Host "[*] Quick scan for Shai-Hulud artefacts in: $root (depth limited)"
+            Write-Host "[*] Quick scan for Shai-Hulud artifacts in: $root (depth limited)"
         } else {
-            Write-Host "[*] Scanning for known Shai-Hulud artefacts under: $root"
+            Write-Host "[*] Scanning for known Shai-Hulud artifacts under: $root"
         }
         Write-Progress -Activity "Scanning for malicious files" -Status "Scanning $root" -PercentComplete (($currentRoot / $totalRoots) * 100)
 
@@ -677,12 +677,12 @@ function Scan-For-MaliciousFiles {
                 $hits += [PSCustomObject]@{
                     Location = $f.FullName
                     Indicator = $f.Name
-                    Type = "file-artefact"
+                    Type = "file-artifact"
                 }
             }
         }
         catch {
-            Write-Host "[!] Error scanning for artefacts under $root : $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "[!] Error scanning for artifacts under $root : $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
@@ -1450,8 +1450,8 @@ if ($ScanMode -eq "Full") {
     Write-Host "[Quick] Skipping npm cache scan (use -ScanMode Full)" -ForegroundColor Gray
 }
 
-Write-Section "Scanning for known Shai-Hulud artefact files"
-$ArtefactHits = Scan-For-MaliciousFiles -Roots $RootPaths -FileNames $MaliciousFileNames -QuickMode:($ScanMode -eq "Quick")
+Write-Section "Scanning for known Shai-Hulud artifact files"
+$ArtifactHits = Scan-For-MaliciousFiles -Roots $RootPaths -FileNames $MaliciousFileNames -QuickMode:($ScanMode -eq "Quick")
 
 Write-Section "Scanning for suspicious git branches and remotes"
 $GitHits = Scan-For-SuspiciousGitBranches -Roots $RootPaths -BranchPatterns $SuspiciousBranchPatterns -QuickMode:($ScanMode -eq "Quick")
@@ -1511,7 +1511,7 @@ $ScanDuration = $ScanEndTime - $ScanStartTime
 $allFindings = @()
 $allFindings += $NodeHits
 $allFindings += $CacheHits
-$allFindings += $ArtefactHits
+$allFindings += $ArtifactHits
 $allFindings += $GitHits
 $allFindings += $WorkflowHits
 $allFindings += $CredentialHits

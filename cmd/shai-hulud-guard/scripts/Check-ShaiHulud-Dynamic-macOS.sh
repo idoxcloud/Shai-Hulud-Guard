@@ -589,39 +589,50 @@ scan_npm_cache() {
   [[ -n "$cache_path" && -d "$cache_path" ]] || { echo "[*] npm cache path not detected."; return; }
   [[ -z "$COMPROMISED_REGEX" ]] && return
   echo "[*] Scanning npm cache at: $cache_path"
+  echo "[*] Searching for compromised packages in cache..."
+  local checked=0
   while IFS= read -r -d '' dir; do
+    ((checked++))
     if [[ "$dir" =~ $COMPROMISED_REGEX ]]; then
       add_finding "npm-cache" "${BASH_REMATCH[0]}" "$dir"
       echo "    [!] FOUND in cache: ${BASH_REMATCH[0]}"
     fi
   done < <(find "$cache_path" -type d -print0 2>/dev/null)
+  echo "[*] Checked $checked cached package directories"
 }
 
 scan_malicious_files() {
   local mode="$1"; shift
   local roots=("$@")
+  local files_checked=0
+  echo "[*] Searching for ${#MALICIOUS_FILES[@]} known malicious file patterns..."
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == "quick" ]]; then
       for f in "${MALICIOUS_FILES[@]}"; do
-        [[ -f "$root/$f" ]] && { add_finding "file-artefact" "$f" "$root/$f"; echo "    [!] FOUND: $f at $root"; }
+        ((files_checked++))
+        [[ -f "$root/$f" ]] && { add_finding "file-artifact" "$f" "$root/$f"; echo "    [!] FOUND: $f at $root"; }
         if [[ -d "$root/.github/workflows" && -f "$root/.github/workflows/$f" ]]; then
-          add_finding "file-artefact" "$f" "$root/.github/workflows/$f"
+          add_finding "file-artifact" "$f" "$root/.github/workflows/$f"
           echo "    [!] FOUND: $f at $root/.github/workflows"
         fi
       done
     else
       while IFS= read -r -d '' fpath; do
-        add_finding "file-artefact" "$(basename "$fpath")" "$fpath"
+        ((files_checked++))
+        add_finding "file-artifact" "$(basename "$fpath")" "$fpath"
         echo "    [!] FOUND: $(basename "$fpath") at $(dirname "$fpath")"
       done < <(find "$root" -type f \( $(printf -- '-name %q -o ' "${MALICIOUS_FILES[@]}") -false \) -print0 2>/dev/null)
     fi
   done
+  echo "[*] Scanned for malicious files (checked $files_checked locations)"
 }
 
 scan_git() {
   local mode="$1"; shift
   local roots=("$@")
+  local repos_checked=0
+  echo "[*] Searching for git repositories and analyzing branches/remotes..."
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     if [[ "$mode" == "quick" ]]; then
@@ -634,6 +645,7 @@ scan_git() {
       done
       if [ ${#candidates[@]} -gt 0 ]; then
         for gitdir in "${candidates[@]}"; do
+        ((repos_checked++))
         local repo
         repo="$(dirname "$gitdir")"
         branches=$(git -C "$repo" branch -a 2>/dev/null || true)
@@ -652,6 +664,7 @@ scan_git() {
       fi
     else
       while IFS= read -r -d '' gitdir; do
+        ((repos_checked++))
         local repo
         repo="$(dirname "$gitdir")"
         branches=$(git -C "$repo" branch -a 2>/dev/null || true)
@@ -669,12 +682,14 @@ scan_git() {
       done < <(find "$root" -type d -name .git -print0 2>/dev/null)
     fi
   done
+  echo "[*] Analyzed $repos_checked git repositories"
 }
 
 scan_workflows() {
   local roots=("$@")
   local tmpfile="$(mktemp)" || { echo "[ERROR] Failed to create temp file" >&2; return 1; }
   local scanned=0
+  echo "[*] Searching for GitHub Actions workflow files..."
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
     find "$root" -type d -path "*/.github/workflows" -print0 2>/dev/null > "$tmpfile" || true
@@ -764,6 +779,7 @@ scan_hooks() {
   local mode="$1"; shift
   local roots=("$@")
   local total_checked=0
+  echo "[*] Analyzing package.json files for suspicious postinstall hooks..."
   
   for root in "${roots[@]}"; do
     [[ -d "$root" ]] || continue
@@ -1127,7 +1143,7 @@ main() {
     echo "[Quick] Skipping npm cache scan (use --mode full)"
   fi
 
-  log_section "Scanning for known Shai-Hulud artefact files"
+  log_section "Scanning for known Shai-Hulud artifact files"
   if ! should_skip_step "malicious_files"; then
     if scan_malicious_files "$SCAN_MODE" "${ROOTS[@]}"; then
       save_checkpoint "malicious_files"

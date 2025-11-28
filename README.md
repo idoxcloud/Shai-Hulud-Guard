@@ -102,22 +102,22 @@ Download the binary for your platform:
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.3/shai-hulud-guard-darwin-arm64 -o shai-hulud-guard
+curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.4/shai-hulud-guard-darwin-arm64 -o shai-hulud-guard
 chmod +x shai-hulud-guard
 sudo mv shai-hulud-guard /usr/local/bin/
 
 # macOS (Intel)
-curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.3/shai-hulud-guard-darwin-amd64 -o shai-hulud-guard
+curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.4/shai-hulud-guard-darwin-amd64 -o shai-hulud-guard
 chmod +x shai-hulud-guard
 sudo mv shai-hulud-guard /usr/local/bin/
 
 # Linux (AMD64)
-curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.3/shai-hulud-guard-linux-amd64 -o shai-hulud-guard
+curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.4/shai-hulud-guard-linux-amd64 -o shai-hulud-guard
 chmod +x shai-hulud-guard
 sudo mv shai-hulud-guard /usr/local/bin/
 
 # Linux (ARM64)
-curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.3/shai-hulud-guard-linux-arm64 -o shai-hulud-guard
+curl -L https://github.com/idoxcloud/Shai-Hulud-Guard/releases/download/v0.1-alpha.4/shai-hulud-guard-linux-arm64 -o shai-hulud-guard
 chmod +x shai-hulud-guard
 sudo mv shai-hulud-guard /usr/local/bin/
 ```

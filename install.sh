@@ -4,7 +4,7 @@ set -euo pipefail
 # Shai-Hulud Guard One-Shot Installer & Runner
 # Usage: curl -fsSL https://raw.githubusercontent.com/idoxcloud/Shai-Hulud-Guard/main/install.sh | bash
 
-VERSION="${SHAI_HULUD_VERSION:-v0.1-alpha.3}"
+VERSION="${SHAI_HULUD_VERSION:-v0.1-alpha.4}"
 INSTALL_DIR="${SHAI_HULUD_INSTALL_DIR:-/usr/local/bin}"
 REPO="idoxcloud/Shai-Hulud-Guard"
 

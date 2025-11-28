@@ -11,12 +11,13 @@
 
 - **🔍 Shai-Hulud Scanner**: Detect compromised npm packages with quick and full scan modes
 - **🛡️ Shai-Hulud Guard**: Install/uninstall npm registry protection system
+- **📊 Comprehensive Reports**: Generate security reports combining scan results with protection status
 - **☁️ S3 Scanning**: Scan S3 buckets for compromised packages
 - **💻 Cross-platform**: Linux, macOS (Intel & ARM), Windows support
 - **🔒 Backup Protection**: Never overwrites original hosts file
 - **🎯 Enhanced UX**: Native Go flags, intuitive command syntax
 - **⚡ Performance**: Bash 3.2+ and Bash 4+ compatibility
-- **📁 Clean Reports**: Scan reports written to temp directory by default
+- **📁 Clean Reports**: Scan reports written to dedicated directory with timestamps
 
 ## Quick Start
 
@@ -49,6 +50,9 @@ sudo mv shai-hulud-guard /usr/local/bin/
 ### Usage
 
 ```bash
+# Generate comprehensive security report (recommended for support)
+shai-hulud-guard -report
+
 # Scan your system (quick scan)
 shai-hulud-guard -scan
 
@@ -62,11 +66,13 @@ shai-hulud-guard -scan -root /path/to/dir -mode full
 sudo shai-hulud-guard -install
 
 # Check status
-sudo shai-hulud-guard -status
+shai-hulud-guard -status
 
 # Show help
 shai-hulud-guard -h
 ```
+
+> **💡 Tip**: Use `shai-hulud-guard -report` to generate a comprehensive security report that combines scan results with system protection status. Perfect for sharing with support teams or security audits.
 
 ## Documentation
 
